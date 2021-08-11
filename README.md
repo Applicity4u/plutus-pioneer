@@ -1,2 +1,2 @@
 # plutus-pioneer
-Plutus Pioneer Program Code
+Scratchpad for Plutus Pioneer Program Lecture 07 homework
