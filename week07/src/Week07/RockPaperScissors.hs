@@ -145,22 +145,25 @@ final Finished = True
 final _        = False
 
 {-# INLINABLE check #-}
-check :: ByteString -> ByteString -> GameDatum -> GameRedeemer -> ScriptContext -> Bool
---check bsZero' bsOne' (GameDatum bs (Just c)) (Reveal nonce c') _ = True
-check _       _      _                       _                 _ = True
+check :: ByteString -> ByteString -> ByteString -> GameDatum -> GameRedeemer -> ScriptContext -> Bool
+check bsRock' bsPaper' bsScissors' (GameDatum bs (Just _)) (Reveal nonce c') _  
+   | c' == Rock     = bs == sha2_256 ( nonce `concatenate` bsRock')
+   | c' == Paper    = bs == sha2_256 ( nonce `concatenate` bsPaper')
+   | c' == Scissors = bs == sha2_256 ( nonce `concatenate` bsScissors')
+check _       _        _           _                        _                _ = True
 
 {-# INLINABLE gameStateMachine #-}
-gameStateMachine :: Game -> ByteString -> ByteString -> StateMachine GameDatum GameRedeemer
-gameStateMachine game bsZero' bsOne' = StateMachine
+gameStateMachine :: Game -> ByteString -> ByteString -> ByteString -> StateMachine GameDatum GameRedeemer
+gameStateMachine game bsRock' bsPaper' bsScissors' = StateMachine
     { smTransition  = transition game
     , smFinal       = final
-    , smCheck       = check bsZero' bsOne'
+    , smCheck       = check bsRock' bsPaper' bsScissors'
     , smThreadToken = Just $ gToken game
     }
 
 {-# INLINABLE mkGameValidator #-}
-mkGameValidator :: Game -> ByteString -> ByteString -> GameDatum -> GameRedeemer -> ScriptContext -> Bool
-mkGameValidator game bsZero' bsOne' = mkValidator $ gameStateMachine game bsZero' bsOne'
+mkGameValidator :: Game -> ByteString -> ByteString -> ByteString -> GameDatum -> GameRedeemer -> ScriptContext -> Bool
+mkGameValidator game bsRock' bsPaper' bsScissors' = mkValidator $ gameStateMachine game bsRock' bsPaper' bsScissors'
 
 type Gaming = StateMachine GameDatum GameRedeemer
 
@@ -178,14 +181,15 @@ bsScissors :: ByteString
 bsScissors = "Scissors"
 
 gameStateMachine' :: Game -> StateMachine GameDatum GameRedeemer
-gameStateMachine' game = gameStateMachine game bsZero bsOne
+gameStateMachine' game = gameStateMachine game bsRock bsPaper bsScissors
 
 typedGameValidator :: Game -> Scripts.TypedValidator Gaming
 typedGameValidator game = Scripts.mkTypedValidator @Gaming
     ($$(PlutusTx.compile [|| mkGameValidator ||])
         `PlutusTx.applyCode` PlutusTx.liftCode game
-        `PlutusTx.applyCode` PlutusTx.liftCode bsZero
-        `PlutusTx.applyCode` PlutusTx.liftCode bsOne)
+        `PlutusTx.applyCode` PlutusTx.liftCode bsRock
+        `PlutusTx.applyCode` PlutusTx.liftCode bsPaper
+        `PlutusTx.applyCode` PlutusTx.liftCode bsScissors)
     $$(PlutusTx.compile [|| wrap ||])
   where
     wrap = Scripts.wrapValidator @GameDatum @GameRedeemer
