@@ -83,7 +83,7 @@ instance Eq GameDatum where
 
 PlutusTx.unstableMakeIsData ''GameDatum
 
-data GameRedeemer = Play GameChoice | Reveal ByteString GameChoice | ClaimFirst | ClaimSecond
+data GameRedeemer = Play GameChoice | RevealWin ByteString GameChoice | RevealDraw ByteString GameChoice | ClaimFirst | ClaimSecond
     deriving Show
 
 PlutusTx.unstableMakeIsData ''GameRedeemer
@@ -103,36 +103,31 @@ gameDatum o f = do
 transition :: Game -> State GameDatum -> GameRedeemer -> Maybe (TxConstraints Void Void, State GameDatum)
 transition game s r = case (stateValue s, stateData s, r) of
     (v, GameDatum bs Nothing, Play c)
-        | lovelaces v == gStake game         -> Just ( Constraints.mustBeSignedBy (gSecond game)                    <>
+        | lovelaces v == gStake game         -> Just ( Constraints.mustBeSignedBy (gSecond game)                                   <>
                                                        Constraints.mustValidateIn (to $ gPlayDeadline game)
                                                      , State (GameDatum bs $ Just c) (lovelaceValueOf $ 2 * gStake game)
                                                      )
 
-    (v, GameDatum bs (Just c), Reveal _ c')
-        | lovelaces v == (2 * gStake game) 
-          && (c == c')                       -> Just ( Constraints.mustBeSignedBy (gFirst game)                     <>
-                                                       Constraints.mustValidateIn (to $ gRevealDeadline game)
-                                                     , State (GameDatum bs $ Just c) (lovelaceValueOf $ gStake game)
-                                                     )
-
-    (v, GameDatum _ (Just _), Reveal _ _)
-        | lovelaces v == (2 * gStake game)   -> Just ( Constraints.mustBeSignedBy (gFirst game)                     <>
+    (v, GameDatum _ (Just _), RevealWin _ _)
+        | lovelaces v == (2 * gStake game)   -> Just ( Constraints.mustBeSignedBy (gFirst game)                                    <>
                                                        Constraints.mustValidateIn (to $ gRevealDeadline game)
                                                      , State Finished mempty
                                                      )
+
+    (v, GameDatum _ (Just _), RevealDraw _ _)
+        | lovelaces v == (2 * gStake game)   -> Just ( Constraints.mustBeSignedBy (gFirst game)                                    <>
+                                                       Constraints.mustValidateIn (to $ gRevealDeadline game)                      <>
+                                                       Constraints.mustPayToPubKey (gFirst game) (lovelaceValueOf $ gStake game)   <>
+                                                       Constraints.mustPayToPubKey (gSecond game) (lovelaceValueOf $ gStake game)
+                                                     , State Finished mempty
+                                                     )
     (v, GameDatum _ Nothing, ClaimFirst)
-        | lovelaces v == gStake game         -> Just ( Constraints.mustBeSignedBy (gFirst game)                     <>
+        | lovelaces v == gStake game         -> Just ( Constraints.mustBeSignedBy (gFirst game)                                    <>
                                                        Constraints.mustValidateIn (from $ 1 + gPlayDeadline game)
                                                      , State Finished mempty
                                                      )
     (v, GameDatum _ (Just _), ClaimSecond)
-        | lovelaces v == (2 * gStake game)   -> Just ( Constraints.mustBeSignedBy (gSecond game)                    <>
-                                                       Constraints.mustValidateIn (from $ 1 + gRevealDeadline game)
-                                                     , State Finished mempty
-                                                     )
-
-    (v, GameDatum _ (Just _), ClaimSecond)
-        | lovelaces v == gStake game         -> Just ( Constraints.mustBeSignedBy (gSecond game)                    <>
+        | lovelaces v == (2 * gStake game)   -> Just ( Constraints.mustBeSignedBy (gSecond game)                                   <>
                                                        Constraints.mustValidateIn (from $ 1 + gRevealDeadline game)
                                                      , State Finished mempty
                                                      )
@@ -146,7 +141,7 @@ final _        = False
 
 {-# INLINABLE check #-}
 check :: ByteString -> ByteString -> ByteString -> GameDatum -> GameRedeemer -> ScriptContext -> Bool
-check bsRock' bsPaper' bsScissors' (GameDatum bs (Just _)) (Reveal nonce c') _  
+check bsRock' bsPaper' bsScissors' (GameDatum bs (Just _)) (RevealDraw nonce c') _  
    | c' == Rock     = bs == sha2_256 ( nonce `concatenate` bsRock')
    | c' == Paper    = bs == sha2_256 ( nonce `concatenate` bsPaper')
    | c' == Scissors = bs == sha2_256 ( nonce `concatenate` bsScissors')
@@ -255,16 +250,15 @@ firstGame fp = do
 
             GameDatum _ (Just c') | beats c c' -> do
                 logInfo @String "second player played and lost"
-                void $ mapError' $ runStep client $ Reveal (fpNonce fp) c
+                void $ mapError' $ runStep client $ RevealWin (fpNonce fp) c
                 logInfo @String "first player revealed and won"
 
             GameDatum _ (Just c') | c == c' -> do
                 logInfo @String "second player played same choice"
-                void $ mapError' $ runStep client $ Reveal (fpNonce fp) c
+                void $ mapError' $ runStep client $ RevealDraw (fpNonce fp) c
                 logInfo @String "first player revealed same choice"
 
-            _ -> do
-                return () --logInfo @String "finished state"
+            _ -> logInfo @String "second player played and won"
 
 data SecondParams = SecondParams
     { spFirst          :: !PubKeyHash
@@ -300,21 +294,11 @@ secondGame sp = do
 
                 m' <- mapError' $ getOnChainState client
                 case m' of
-                    Nothing -> logInfo @String "first player won"
-                    Just ((o', _), _) -> case tyTxOutData o' of
-                        GameDatum _ (Just _)
-                          | (lovelaces $ txOutValue $ tyTxOutTxOut o') == (gStake game) -> do 
-                              logInfo @String "first player refunded (after deducting fees)"
-                              void $ mapError' $ runStep client ClaimSecond
-                              logInfo @String "second player refunded (after deducting fees)"
-
-                        GameDatum _ _ -> do
-                           logInfo @String "first player didn't reveal"
-                           void $ mapError' $ runStep client ClaimSecond 
-                           logInfo @String "second player won"
-
-                        _ -> do
-                           logInfo @String "unexpected datum"
+                    Nothing -> logInfo @String "Second player didn't win"
+                    Just _ -> do
+                        logInfo @String "first player didn't reveal"
+                        void $ mapError' $ runStep client ClaimSecond 
+                        logInfo @String "second player won"
 
             _ -> throwError "unexpected datum"
 
