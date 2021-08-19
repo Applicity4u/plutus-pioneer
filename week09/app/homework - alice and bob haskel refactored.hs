@@ -20,9 +20,6 @@ charlie = "Charlie"
 deposit :: Value
 deposit = Constant 10
 
-charlieDeposit :: Value
-charlieDeposit = Constant 20
-
 choiceId :: ChoiceId
 choiceId = ChoiceId "Winner" charlie
 
@@ -34,7 +31,7 @@ contract =
                 charlie
                 charlie
                 ada
-                charlieDeposit
+                (MulValue deposit $ Constant 2)
             )
             (When
                 [Case
